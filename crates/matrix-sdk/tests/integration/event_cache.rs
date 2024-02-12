@@ -141,6 +141,7 @@ async fn test_add_initial_events() {
                 "origin_server_ts": 12344446,
                 "content": { "body":"new choice!", "msgtype": "m.text" },
             }))],
+            None,
         )
         .await
         .unwrap();

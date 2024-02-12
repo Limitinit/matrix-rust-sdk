@@ -181,6 +181,11 @@ impl TimelineBuilder {
                             inner.clear().await;
                         }
 
+                        RoomEventCacheUpdate::Prepend { events } => {
+                            trace!("Received events to prepend.");
+                            todo!();
+                        }
+
                         RoomEventCacheUpdate::Append {
                             events,
                             prev_batch,
