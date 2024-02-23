@@ -82,30 +82,19 @@ impl TimelineInnerState {
     pub(super) async fn add_initial_events<P: RoomDataProvider>(
         &mut self,
         events: Vec<SyncTimelineEvent>,
-        mut back_pagination_token: Option<String>,
         room_data_provider: &P,
         settings: &TimelineInnerSettings,
     ) {
         debug!("Adding {} initial events", events.len());
-
         let mut txn = self.transaction();
         for event in events {
-            let (event_id, _) = txn
-                .handle_remote_event(
-                    event,
-                    TimelineItemPosition::End { from_cache: true },
-                    room_data_provider,
-                    settings,
-                )
-                .await;
-
-            // Back-pagination token, if any, is added to the first added event.
-            if let Some(event_id) = event_id {
-                if let Some(token) = back_pagination_token.take() {
-                    trace!(token, ?event_id, "Adding back-pagination token to the back");
-                    txn.meta.back_pagination_tokens.push_back((event_id, token));
-                }
-            }
+            txn.handle_remote_event(
+                event,
+                TimelineItemPosition::End { from_cache: true },
+                room_data_provider,
+                settings,
+            )
+            .await;
         }
         txn.commit();
     }
@@ -470,7 +459,7 @@ impl TimelineInnerStateTransaction<'_> {
     #[instrument(skip_all, fields(limited = timeline.limited))]
     async fn handle_sync_timeline<P: RoomDataProvider>(
         &mut self,
-        mut timeline: Timeline,
+        timeline: Timeline,
         room_data_provider: &P,
         settings: &TimelineInnerSettings,
     ) {
@@ -481,15 +470,7 @@ impl TimelineInnerStateTransaction<'_> {
         let num_events = timeline.events.len();
         for (i, event) in timeline.events.into_iter().enumerate() {
             trace!("Handling event {} out of {num_events}", i + 1);
-            let (event_id, _) = self.handle_live_event(event, room_data_provider, settings).await;
-
-            // Back-pagination token, if any, is added to the first added event.
-            if let Some(event_id) = event_id {
-                if let Some(token) = timeline.prev_batch.take() {
-                    trace!(token, ?event_id, "Adding back-pagination token to the back");
-                    self.meta.back_pagination_tokens.push_back((event_id, token));
-                }
-            }
+            self.handle_live_event(event, room_data_provider, settings).await;
         }
     }
 
@@ -672,7 +653,6 @@ impl TimelineInnerStateTransaction<'_> {
         // We forgot about the fully read marker right above, so wait for a new one
         // before attempting to update it for each new timeline item.
         self.has_up_to_date_read_marker_item = true;
-        self.back_pagination_tokens.clear();
 
         debug!(remaining_items = self.items.len(), "Timeline cleared");
     }
@@ -805,6 +785,7 @@ pub(in crate::timeline) struct TimelineInnerMetadata {
     /// items.
     ///
     /// Private because it's not needed by `TimelineEventHandler`.
+    /// TODO: (bnjbvr) KILL THIS WITH FIRE
     back_pagination_tokens: VecDeque<(OwnedEventId, String)>,
 }
 

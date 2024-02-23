@@ -404,24 +404,13 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         }
     }
 
-    pub(super) async fn add_initial_events(
-        &mut self,
-        events: Vec<SyncTimelineEvent>,
-        back_pagination_token: Option<String>,
-    ) {
+    pub(super) async fn add_initial_events(&mut self, events: Vec<SyncTimelineEvent>) {
         if events.is_empty() {
             return;
         }
 
         let mut state = self.state.write().await;
-        state
-            .add_initial_events(
-                events,
-                back_pagination_token,
-                &self.room_data_provider,
-                &self.settings,
-            )
-            .await;
+        state.add_initial_events(events, &self.room_data_provider, &self.settings).await;
     }
 
     pub(super) async fn clear(&self) {
