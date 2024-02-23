@@ -39,24 +39,27 @@ use crate::timeline::{
 };
 
 #[async_test]
-async fn test_initial_events() {
+async fn initial_events() {
     let mut timeline = TestTimeline::new();
     let mut stream = timeline.subscribe().await;
 
     timeline
         .inner
-        .add_initial_events(vec![
-            SyncTimelineEvent::new(
-                timeline
-                    .event_builder
-                    .make_sync_message_event(*ALICE, RoomMessageEventContent::text_plain("A")),
-            ),
-            SyncTimelineEvent::new(
-                timeline
-                    .event_builder
-                    .make_sync_message_event(*BOB, RoomMessageEventContent::text_plain("B")),
-            ),
-        ])
+        .add_initial_events(
+            vec![
+                SyncTimelineEvent::new(
+                    timeline
+                        .event_builder
+                        .make_sync_message_event(*ALICE, RoomMessageEventContent::text_plain("A")),
+                ),
+                SyncTimelineEvent::new(
+                    timeline
+                        .event_builder
+                        .make_sync_message_event(*BOB, RoomMessageEventContent::text_plain("B")),
+                ),
+            ],
+            None,
+        )
         .await;
 
     let item = assert_next_matches!(stream, VectorDiff::PushBack { value } => value);
@@ -68,7 +71,7 @@ async fn test_initial_events() {
 }
 
 #[async_test]
-async fn test_sticker() {
+async fn sticker() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe_events().await;
 
@@ -96,7 +99,7 @@ async fn test_sticker() {
 }
 
 #[async_test]
-async fn test_room_member() {
+async fn room_member() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe_events().await;
 
@@ -164,7 +167,7 @@ async fn test_room_member() {
 }
 
 #[async_test]
-async fn test_other_state() {
+async fn other_state() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe().await;
 
@@ -190,7 +193,7 @@ async fn test_other_state() {
 }
 
 #[async_test]
-async fn test_dedup_pagination() {
+async fn dedup_pagination() {
     let timeline = TestTimeline::new();
 
     let event = timeline
@@ -213,7 +216,7 @@ async fn test_dedup_pagination() {
 }
 
 #[async_test]
-async fn test_dedup_initial() {
+async fn dedup_initial() {
     let mut timeline = TestTimeline::new();
 
     let event_a = SyncTimelineEvent::new(
@@ -234,16 +237,19 @@ async fn test_dedup_initial() {
 
     timeline
         .inner
-        .add_initial_events(vec![
-            // two events
-            event_a.clone(),
-            event_b.clone(),
-            // same events got duplicated in next sync response
-            event_a,
-            event_b,
-            // … and a new event also came in
-            event_c,
-        ])
+        .add_initial_events(
+            vec![
+                // two events
+                event_a.clone(),
+                event_b.clone(),
+                // same events got duplicated in next sync response
+                event_a,
+                event_b,
+                // … and a new event also came in
+                event_c,
+            ],
+            None,
+        )
         .await;
 
     let timeline_items = timeline.inner.items().await;
@@ -266,7 +272,7 @@ async fn test_dedup_initial() {
 }
 
 #[async_test]
-async fn test_sanitized() {
+async fn sanitized() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe().await;
 
@@ -307,7 +313,7 @@ async fn test_sanitized() {
 }
 
 #[async_test]
-async fn test_reply() {
+async fn reply() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe().await;
 
@@ -363,7 +369,7 @@ async fn test_reply() {
 }
 
 #[async_test]
-async fn test_thread() {
+async fn thread() {
     let timeline = TestTimeline::new();
     let mut stream = timeline.subscribe().await;
 

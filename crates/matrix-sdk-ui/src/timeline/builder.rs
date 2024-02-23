@@ -43,12 +43,22 @@ use super::{
 #[derive(Debug)]
 pub struct TimelineBuilder {
     room: Room,
+    prev_token: Option<String>,
     settings: TimelineInnerSettings,
 }
 
 impl TimelineBuilder {
     pub(super) fn new(room: &Room) -> Self {
-        Self { room: room.clone(), settings: TimelineInnerSettings::default() }
+        Self { room: room.clone(), prev_token: None, settings: TimelineInnerSettings::default() }
+    }
+
+    /// Add initial events to the timeline.
+    ///
+    /// TODO: remove this, the EventCache should hold the pagination token in
+    /// the first place.
+    pub fn with_pagination_token(mut self, prev_token: Option<String>) -> Self {
+        self.prev_token = prev_token;
+        self
     }
 
     /// Enable tracking of the fully-read marker and the read receipts on the
@@ -105,10 +115,11 @@ impl TimelineBuilder {
         fields(
             room_id = ?self.room.room_id(),
             track_read_receipts = self.settings.track_read_receipts,
+            prev_token = self.prev_token,
         )
     )]
     pub async fn build(self) -> event_cache::Result<Timeline> {
-        let Self { room, settings } = self;
+        let Self { room, prev_token, settings } = self;
 
         let client = room.client();
         let event_cache = client.event_cache();
@@ -130,7 +141,7 @@ impl TimelineBuilder {
         }
 
         if has_events {
-            inner.add_initial_events(events).await;
+            inner.add_initial_events(events, prev_token).await;
         }
         if track_read_marker_and_receipts {
             inner.load_fully_read_event().await;
@@ -172,6 +183,7 @@ impl TimelineBuilder {
 
                         RoomEventCacheUpdate::Append {
                             events,
+                            prev_batch,
                             account_data,
                             ephemeral,
                             ambiguity_changes,
@@ -184,7 +196,7 @@ impl TimelineBuilder {
                             // `handle_add_events`.
                             let timeline = matrix_sdk_base::sync::Timeline {
                                 limited: false,
-                                prev_batch: None,
+                                prev_batch,
                                 events,
                             };
                             let update = JoinedRoomUpdate {
