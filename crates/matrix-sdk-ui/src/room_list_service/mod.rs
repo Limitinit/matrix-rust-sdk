@@ -483,7 +483,6 @@ fn configure_all_or_visible_rooms_list(
     list_builder
         .sort(vec!["by_recency".to_owned(), "by_name".to_owned()])
         .filters(Some(assign!(SyncRequestListFilters::default(), {
-            is_invite: Some(false),
             is_tombstoned: Some(false),
             not_room_types: vec!["m.space".to_owned()],
         })))
