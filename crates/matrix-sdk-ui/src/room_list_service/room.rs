@@ -166,7 +166,7 @@ impl Room {
             .client()
             .event_cache()
             .add_initial_events(
-                self.inner.room.room_id(),
+                self.inner.room.clone(),
                 self.inner.sliding_sync_room.timeline_queue().iter().cloned().collect(),
             )
             .await?;

@@ -54,7 +54,7 @@ use matrix_sdk_common::executor::{spawn, JoinHandle};
 use ruma::{
     events::{AnyRoomAccountDataEvent, AnySyncEphemeralRoomEvent},
     serde::Raw,
-    OwnedEventId, OwnedRoomId, RoomId,
+    OwnedEventId, OwnedRoomId,
 };
 use tokio::sync::{
     broadcast::{error::RecvError, Receiver, Sender},
@@ -76,13 +76,6 @@ pub enum EventCacheError {
         "The EventCache hasn't subscribed to sync responses yet, call `EventCache::subscribe()`"
     )]
     NotSubscribedYet,
-
-    /// The room hasn't been found in the client.
-    ///
-    /// Technically, it's possible to request a `RoomEventCache` for a room that
-    /// is not known to the client, leading to this error.
-    #[error("Room {0} hasn't been found in the Client.")]
-    RoomNotFound(OwnedRoomId),
 
     /// The [`EventCache`] owns a weak reference to the [`Client`] it pertains
     /// to. It's possible this weak reference points to nothing anymore, at
@@ -153,9 +146,7 @@ impl EventCache {
 
         let _ = self.inner.drop_handles.get_or_init(|| {
             // Spawn the task that will listen to all the room updates at once.
-            let room_updates_feed = client.subscribe_to_all_room_updates();
-            let listen_updates_task =
-                spawn(Self::listen_task(self.inner.clone(), room_updates_feed));
+            let listen_updates_task = spawn(Self::listen_task(self.inner.clone(), client));
 
             Arc::new(EventCacheDropHandles { listen_updates_task })
         });
@@ -163,15 +154,14 @@ impl EventCache {
         Ok(())
     }
 
-    async fn listen_task(
-        inner: Arc<EventCacheInner>,
-        mut room_updates_feed: Receiver<RoomUpdates>,
-    ) {
+    async fn listen_task(inner: Arc<EventCacheInner>, client: Client) {
         trace!("Spawning the listen task");
+        let mut room_updates_feed = client.subscribe_to_all_room_updates();
+
         loop {
             match room_updates_feed.recv().await {
                 Ok(updates) => {
-                    if let Err(err) = inner.handle_room_updates(updates).await {
+                    if let Err(err) = inner.handle_room_updates(&client, updates).await {
                         match err {
                             EventCacheError::ClientDropped => {
                                 // The client has dropped, exit the listen task.
@@ -206,15 +196,15 @@ impl EventCache {
     }
 
     /// Return a room-specific view over the [`EventCache`].
-    pub async fn for_room(
+    pub(crate) async fn for_room(
         &self,
-        room_id: &RoomId,
+        room: Room,
     ) -> Result<(RoomEventCache, Arc<EventCacheDropHandles>)> {
         let Some(drop_handles) = self.inner.drop_handles.get().cloned() else {
             return Err(EventCacheError::NotSubscribedYet);
         };
 
-        let room = self.inner.for_room(room_id).await?;
+        let room = self.inner.for_room(room).await?;
 
         Ok((room, drop_handles))
     }
@@ -225,15 +215,15 @@ impl EventCache {
     /// its own store.
     pub async fn add_initial_events(
         &self,
-        room_id: &RoomId,
+        room: Room,
         events: Vec<SyncTimelineEvent>,
     ) -> Result<()> {
-        let room_cache = self.inner.for_room(room_id).await?;
+        let room_cache = self.inner.for_room(room).await?;
 
         // We could have received events during a previous sync; remove them all, since
         // we can't know where to insert the "initial events" with respect to
         // them.
-        self.inner.store.clear_room_events(room_id).await?;
+        self.inner.store.clear_room_events(room_cache.inner.room.room_id()).await?;
         let _ = room_cache.inner.sender.send(RoomEventCacheUpdate::Clear);
 
         room_cache.inner.append_events(events).await?;
@@ -270,14 +260,19 @@ impl EventCacheInner {
     }
 
     /// Handles a single set of room updates at once.
-    async fn handle_room_updates(&self, updates: RoomUpdates) -> Result<()> {
+    async fn handle_room_updates(&self, client: &Client, updates: RoomUpdates) -> Result<()> {
         // First, take the lock that indicates we're processing updates, to avoid
         // handling multiple updates concurrently.
         let _process_lock = self.process_lock.lock().await;
 
         // Left rooms.
         for (room_id, left_room_update) in updates.leave {
-            let room = self.for_room(&room_id).await?;
+            let Some(sdk_room) = client.get_room(&room_id) else {
+                error!(%room_id, "missing SDK room for a room that received an update");
+                continue;
+            };
+
+            let room = self.for_room(sdk_room).await?;
 
             if let Err(err) = room.inner.handle_left_room_update(left_room_update).await {
                 // Non-fatal error, try to continue to the next room.
@@ -287,7 +282,12 @@ impl EventCacheInner {
 
         // Joined rooms.
         for (room_id, joined_room_update) in updates.join {
-            let room = self.for_room(&room_id).await?;
+            let Some(sdk_room) = client.get_room(&room_id) else {
+                error!(%room_id, "missing SDK room for a room that received an update");
+                continue;
+            };
+
+            let room = self.for_room(sdk_room).await?;
 
             if let Err(err) = room.inner.handle_joined_room_update(joined_room_update).await {
                 // Non-fatal error, try to continue to the next room.
@@ -302,14 +302,12 @@ impl EventCacheInner {
     }
 
     /// Return a room-specific view over the [`EventCache`].
-    ///
-    /// It may not be found, if the room isn't known to the client.
-    async fn for_room(&self, room_id: &RoomId) -> Result<RoomEventCache> {
+    async fn for_room(&self, room: Room) -> Result<RoomEventCache> {
         // Fast path: the entry exists; let's acquire a read lock, it's cheaper than a
         // write lock.
         let by_room_guard = self.by_room.read().await;
 
-        match by_room_guard.get(room_id) {
+        match by_room_guard.get(room.room_id()) {
             Some(room) => Ok(room.clone()),
 
             None => {
@@ -319,18 +317,14 @@ impl EventCacheInner {
 
                 // In the meanwhile, some other caller might have obtained write access and done
                 // the same, so check for existence again.
-                if let Some(room) = by_room_guard.get(room_id) {
+                if let Some(room) = by_room_guard.get(room.room_id()) {
                     return Ok(room.clone());
                 }
 
-                let room = self
-                    .client()?
-                    .get_room(room_id)
-                    .ok_or_else(|| EventCacheError::RoomNotFound(room_id.to_owned()))?;
-
+                let room_id = room.room_id().to_owned();
                 let room_event_cache = RoomEventCache::new(room, self.store.clone());
 
-                by_room_guard.insert(room_id.to_owned(), room_event_cache.clone());
+                by_room_guard.insert(room_id, room_event_cache.clone());
 
                 Ok(room_event_cache)
             }

@@ -258,7 +258,10 @@ async fn timeline_test_helper(
     // TODO: when the event cache handles its own cache, we can remove this.
     client
         .event_cache()
-        .add_initial_events(room_id, sliding_sync_room.timeline_queue().iter().cloned().collect())
+        .add_initial_events(
+            sdk_room.clone(),
+            sliding_sync_room.timeline_queue().iter().cloned().collect(),
+        )
         .await?;
 
     let timeline = Timeline::builder(&sdk_room)
